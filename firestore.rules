@@ -1,0 +1,419 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return isAuthenticated() && 
+             (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+              exists(/databases/$(database)/documents/admin/$(request.auth.uid)));
+    }
+    
+    // Helper function to check if user is the owner of a document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Helper function to validate email format
+    function isValidEmail(email) {
+      return email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+    
+    // Helper function to validate phone number format
+    function isValidPhone(phone) {
+      return phone.matches('^\\+[1-9]\\d{1,14}$');
+    }
+    
+    // ============ MEMBERS ============
+    match /members/{userId} {
+      allow read: if isAuthenticated() && isOwner(userId);
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && 
+                       isOwner(userId) &&
+                       isValidEmail(request.resource.data.email) &&
+                       isValidPhone(request.resource.data.mobileNumber) &&
+                       request.resource.data.role == 'member';
+      allow update: if isAuthenticated() && 
+                       isOwner(userId) &&
+                       request.resource.data.role == resource.data.role &&
+                       request.resource.data.id == resource.data.id;
+      allow delete: if isAdmin();
+    }
+    
+    // ============ ADMINS ============
+    // Allow authenticated users to read admin collection to check admin status
+    // Only admins can write
+    match /admins/{adminId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    match /admin/{adminId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============ UTILITY BILLS ============
+    match /utility_bills/{billId} {
+      // Allow list queries for authenticated users (for dashboard/overview)
+      allow list: if isAuthenticated();
+      // Individual document read - users can read their own bills or admins can read all
+      allow get: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAdmin() &&
+                       request.resource.data.amount is number &&
+                       request.resource.data.amount > 0;
+      allow update, delete: if isAdmin();
+    }
+    
+    // ============ PAYMENTS ============
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.amount is number &&
+                       request.resource.data.amount > 0;
+      allow update: if isAdmin() &&
+                       request.resource.data.userId == resource.data.userId;
+      allow delete: if false;
+    }
+    
+    // ============ MAINTENANCE REQUESTS ============
+    match /maintenance_requests/{requestId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.isPublic == true ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (isOwner(resource.data.userId) && 
+         !('assignedTo' in request.resource.data.diff(resource.data))) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+    
+    // ============ NOTICES ============
+    match /notices/{noticeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============ BALANCE SHEETS ============
+    match /balance_sheets/{sheetId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============ NOTIFICATIONS ============
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAdmin();
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.userId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+    match /user_notifications/{notificationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.userId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.userId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ AUDIT LOGS ============
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+    
+    // ============ FORUM POSTS ============
+    match /forum_posts/{postId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.authorId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.authorId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.authorId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ FORUM COMMENTS ============
+    match /forum_comments/{commentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.authorId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.authorId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.authorId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ POLLS ============
+    match /polls/{pollId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.createdBy) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.createdBy) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ FACILITIES ============
+    match /facilities/{facilityId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============ FACILITY BOOKINGS ============
+    match /facility_bookings/{bookingId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (isOwner(resource.data.userId) && resource.data.status == 'pending') ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isOwner(resource.data.userId) && resource.data.status == 'pending') ||
+        isAdmin()
+      );
+    }
+    
+    // ============ VISITORS ============
+    match /visitors/{visitorId} {
+      allow read: if isAuthenticated() && (
+        resource.data.residentUserId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                       request.resource.data.residentUserId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.residentUserId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.residentUserId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ STAFF ============
+    match /staff/{staffId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============ STAFF ATTENDANCE ============
+    match /staff_attendance/{attendanceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+    
+    // ============ EMERGENCY ALERTS ============
+    match /emergency_alerts/{alertId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.userId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+    
+    // ============ EMERGENCY CONTACTS ============
+    match /emergency_contacts/{contactId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============ CHAT ROOMS ============
+    match /chat_rooms/{roomId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid in resource.data.members ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                       request.auth.uid in request.resource.data.members;
+      allow update: if isAuthenticated() && (
+        request.auth.uid in resource.data.members ||
+        request.auth.uid in resource.data.admins ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        request.auth.uid in resource.data.admins ||
+        isAdmin()
+      );
+    }
+    
+    // ============ CHAT MESSAGES ============
+    match /chat_messages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.senderId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.senderId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.senderId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ DOCUMENTS ============
+    match /documents/{documentId} {
+      allow read: if isAuthenticated() && (
+        resource.data.accessLevel == 'public' ||
+        resource.data.accessLevel == 'members_only' ||
+        request.auth.uid in resource.data.sharedWith ||
+        request.resource.data.uploadedBy == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                       request.resource.data.uploadedBy == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.uploadedBy) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.uploadedBy) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ DOCUMENT FOLDERS ============
+    match /document_folders/{folderId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (
+        isOwner(resource.data.createdBy) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ EVENTS ============
+    match /events/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.organizerId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.organizerId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.organizerId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ PACKAGES ============
+    match /packages/{packageId} {
+      allow read: if isAuthenticated() && (
+        resource.data.recipientUserId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.recipientUserId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+    
+    // ============ VOTINGS ============
+    match /votings/{votingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.createdBy) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.createdBy) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ MEETINGS ============
+    match /meetings/{meetingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.organizerId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.organizerId) ||
+        request.auth.uid in resource.data.requiredAttendees ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.organizerId) ||
+        isAdmin()
+      );
+    }
+    
+    // ============ EXPENSES ============
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.paidBy == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.paidBy) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        isOwner(resource.data.paidBy) ||
+        isAdmin()
+      );
+    }
+    
+    // Deny all other collections by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
