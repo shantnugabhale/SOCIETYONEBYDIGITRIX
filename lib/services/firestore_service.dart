@@ -16,6 +16,10 @@ import '../models/event_model.dart';
 import '../models/document_model.dart';
 import '../models/package_model.dart';
 import '../models/emergency_model.dart';
+import '../models/chat_model.dart';
+import '../models/society_model.dart';
+import '../models/building_model.dart';
+import '../models/super_admin_model.dart';
 
 class FirestoreService {
   static final FirestoreService _instance = FirestoreService._internal();
@@ -43,8 +47,14 @@ class FirestoreService {
   CollectionReference get _documentsCollection => _firestore.collection('documents');
   CollectionReference get _packagesCollection => _firestore.collection('packages');
   CollectionReference get _emergencyAlertsCollection => _firestore.collection('emergency_alerts');
+  CollectionReference get _chatRoomsCollection => _firestore.collection('chat_rooms');
+  CollectionReference get _chatMessagesCollection => _firestore.collection('chat_messages');
+  CollectionReference get _societiesCollection => _firestore.collection('societies');
+  CollectionReference get _unitsCollection => _firestore.collection('units');
+  CollectionReference get _buildingsCollection => _firestore.collection('buildings');
+  CollectionReference get _superAdminsCollection => _firestore.collection('super_admins');
 
-  /// Save member profile to Firestore
+  /// Save member profile to Firestore (with society/unit/role data)
   Future<void> saveMemberProfile({
     required String firstName,
     required String? middleName,
@@ -53,6 +63,9 @@ class FirestoreService {
     required String phoneNumber,
     required String flatNumber,
     required String building,
+    String? societyId,
+    String? societyName,
+    String? userType, // 'owner', 'tenant', 'family_member'
   }) async {
     try {
       final user = _auth.currentUser;
@@ -65,15 +78,20 @@ class FirestoreService {
           ? '$firstName $middleName $surname'
           : '$firstName $surname';
 
-      // Create user model
+      // Create user model with STRICT approval workflow
       final userModel = UserModel(
         id: user.uid,
         email: email,
         name: fullName,
         mobileNumber: phoneNumber,
         role: 'member', // Default role
+        societyId: societyId,
+        societyName: societyName,
         apartmentNumber: flatNumber,
         buildingName: building,
+        userType: userType ?? 'owner',
+        approvalStatus: 'pending', // STRICT: Always pending until authority approves
+        addressProofVerified: false,
         isEmailVerified: user.emailVerified,
         isMobileVerified: true, // Phone is verified via Firebase Auth
         createdAt: DateTime.now(),
@@ -1605,5 +1623,640 @@ class FirestoreService {
       if (kDebugMode) debugPrint('Error creating emergency alert: $e');
       throw Exception('Failed to create emergency alert: $e');
     }
+  }
+
+  // ============ Chat Management ============
+
+  /// Get user's chat rooms stream
+  Stream<List<ChatRoomModel>> getChatRoomsStream() {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value([]);
+    
+    return _chatRoomsCollection
+        .where('members', arrayContains: user.uid)
+        .where('isActive', isEqualTo: true)
+        .orderBy('lastMessageAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            data['id'] = doc.id;
+            // Parse lastMessage if exists
+            if (data['lastMessage'] != null) {
+              data['lastMessage'] = ChatMessageModel.fromMap(
+                data['lastMessage'] as Map<String, dynamic>
+              );
+            }
+            return ChatRoomModel.fromMap(data);
+          }).toList();
+        });
+  }
+
+  /// Create chat room
+  Future<String> createChatRoom(ChatRoomModel room) async {
+    try {
+      final docRef = await _chatRoomsCollection.add(room.toMap());
+      return docRef.id;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error creating chat room: $e');
+      throw Exception('Failed to create chat room: $e');
+    }
+  }
+
+  /// Send chat message
+  Future<String> sendChatMessage(ChatMessageModel message) async {
+    try {
+      final docRef = await _chatMessagesCollection.add(message.toMap());
+      // Update chat room's last message
+      final messageMap = message.toMap();
+      await _chatRoomsCollection.doc(message.chatId).update({
+        'lastMessage': messageMap,
+        'lastMessageAt': message.sentAt.toIso8601String(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+      return docRef.id;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error sending chat message: $e');
+      throw Exception('Failed to send message: $e');
+    }
+  }
+
+  /// Get messages for a chat room
+  Stream<List<ChatMessageModel>> getChatMessagesStream(String chatId) {
+    return _chatMessagesCollection
+        .where('chatId', isEqualTo: chatId)
+        .where('isDeleted', isEqualTo: false)
+        .orderBy('sentAt', descending: false)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            data['id'] = doc.id;
+            return ChatMessageModel.fromMap(data);
+          }).toList();
+        });
+  }
+
+  // ============ Society Management ============
+
+  /// Search societies by name, city, or PIN code
+  Future<List<SocietyModel>> searchSocieties({
+    String? name,
+    String? city,
+    String? pinCode,
+  }) async {
+    try {
+      Query query = _societiesCollection.where('isActive', isEqualTo: true);
+
+      if (name != null && name.isNotEmpty) {
+        query = query.where('name', isGreaterThanOrEqualTo: name)
+                     .where('name', isLessThanOrEqualTo: '$name\uf8ff');
+      } else if (city != null && city.isNotEmpty) {
+        query = query.where('city', isEqualTo: city);
+      } else if (pinCode != null && pinCode.isNotEmpty) {
+        query = query.where('pinCode', isEqualTo: pinCode);
+      }
+
+      final snapshot = await query.limit(50).get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return SocietyModel.fromMap(data);
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error searching societies: $e');
+      return [];
+    }
+  }
+
+  /// Get society by ID
+  Future<SocietyModel?> getSocietyById(String societyId) async {
+    try {
+      final doc = await _societiesCollection.doc(societyId).get();
+      if (!doc.exists) return null;
+      final data = doc.data() as Map<String, dynamic>;
+      data['id'] = doc.id;
+      return SocietyModel.fromMap(data);
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting society: $e');
+      return null;
+    }
+  }
+
+  /// Get units for a society and block
+  Future<List<UnitModel>> getSocietyUnits({
+    required String societyId,
+    String? block,
+  }) async {
+    try {
+      Query query = _unitsCollection.where('societyId', isEqualTo: societyId);
+      if (block != null && block.isNotEmpty) {
+        query = query.where('block', isEqualTo: block);
+      }
+      final snapshot = await query.get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return UnitModel.fromMap(data);
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting units: $e');
+      return [];
+    }
+  }
+
+  /// Get unit by ID
+  Future<UnitModel?> getUnitById(String unitId) async {
+    try {
+      final doc = await _unitsCollection.doc(unitId).get();
+      if (!doc.exists) return null;
+      final data = doc.data() as Map<String, dynamic>;
+      data['id'] = doc.id;
+      return UnitModel.fromMap(data);
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting unit: $e');
+      return null;
+    }
+  }
+
+  /// Approve user registration (Gatekeeper logic)
+  Future<void> approveUserRegistration(String userId, String approvedBy) async {
+    try {
+      await _membersCollection.doc(userId).update({
+        'approvalStatus': 'approved',
+        'approvedAt': DateTime.now().toIso8601String(),
+        'approvedBy': approvedBy,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error approving user: $e');
+      throw Exception('Failed to approve user: $e');
+    }
+  }
+
+  /// Reject user registration
+  Future<void> rejectUserRegistration(String userId, String reason, String rejectedBy) async {
+    try {
+      await _membersCollection.doc(userId).update({
+        'approvalStatus': 'rejected',
+        'rejectionReason': reason,
+        'approvedBy': rejectedBy,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error rejecting user: $e');
+      throw Exception('Failed to reject user: $e');
+    }
+  }
+
+  /// Get pending user approvals for a society
+  Stream<List<UserModel>> getPendingApprovalsStream(String societyId) {
+    return _membersCollection
+        .where('societyId', isEqualTo: societyId)
+        .where('approvalStatus', isEqualTo: 'pending')
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            data['id'] = doc.id;
+            return UserModel.fromMap(data);
+          }).toList();
+        });
+  }
+
+  /// Update user privacy settings
+  Future<void> updatePrivacySettings(String userId, bool hideContact) async {
+    try {
+      await _membersCollection.doc(userId).update({
+        'hideContactInDirectory': hideContact,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error updating privacy settings: $e');
+      throw Exception('Failed to update privacy settings: $e');
+    }
+  }
+
+  /// Get resident directory (respecting privacy settings)
+  Future<List<UserModel>> getResidentDirectory(String societyId) async {
+    try {
+      final snapshot = await _membersCollection
+          .where('societyId', isEqualTo: societyId)
+          .where('approvalStatus', isEqualTo: 'approved')
+          .where('isActive', isEqualTo: true)
+          .get();
+
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return UserModel.fromMap(data);
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting resident directory: $e');
+      return [];
+    }
+  }
+
+  /// Update user address proof URL
+  Future<void> updateUserAddressProof(String userId, String addressProofUrl) async {
+    try {
+      await _membersCollection.doc(userId).update({
+        'addressProofUrl': addressProofUrl,
+        'addressProofVerified': false, // Not verified until authority approves
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error updating address proof: $e');
+      throw Exception('Failed to update address proof: $e');
+    }
+  }
+
+  /// Approve user by authority (Chairman/Secretary/Treasurer)
+  Future<void> approveUserByAuthority(
+    String userId,
+    String approvedByUserId,
+    String approvedByRole, // 'chairman', 'secretary', 'treasurer'
+  ) async {
+    try {
+      // Verify the approver has committee role
+      final approver = await getMemberProfile(approvedByUserId);
+      if (approver == null || approver.committeeRole != approvedByRole) {
+        throw Exception('Unauthorized: Only $approvedByRole can approve');
+      }
+
+      await _membersCollection.doc(userId).update({
+        'approvalStatus': 'approved',
+        'addressProofVerified': true,
+        'approvedByRole': approvedByRole,
+        'approvedBy': approvedByUserId,
+        'approvedAt': DateTime.now().toIso8601String(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error approving user: $e');
+      throw Exception('Failed to approve user: $e');
+    }
+  }
+
+  /// Reject user by authority
+  Future<void> rejectUserByAuthority(
+    String userId,
+    String reason,
+    String rejectedByUserId,
+    String rejectedByRole,
+  ) async {
+    try {
+      // Verify the rejector has committee role
+      final rejector = await getMemberProfile(rejectedByUserId);
+      if (rejector == null || rejector.committeeRole != rejectedByRole) {
+        throw Exception('Unauthorized: Only $rejectedByRole can reject');
+      }
+
+      await _membersCollection.doc(userId).update({
+        'approvalStatus': 'rejected',
+        'rejectionReason': reason,
+        'approvedBy': rejectedByUserId,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error rejecting user: $e');
+      throw Exception('Failed to reject user: $e');
+    }
+  }
+
+  /// Check if user is committee member (Chairman/Secretary/Treasurer)
+  bool isCommitteeMember(UserModel? user) {
+    if (user == null) return false;
+    return user.committeeRole != null && 
+           ['chairman', 'secretary', 'treasurer'].contains(user.committeeRole);
+  }
+
+  /// Get pending approvals for a society (only committee members can see)
+  Stream<List<UserModel>> getPendingApprovalsForSociety(String societyId) {
+    return _membersCollection
+        .where('societyId', isEqualTo: societyId)
+        .where('approvalStatus', isEqualTo: 'pending')
+        .where('isActive', isEqualTo: true)
+        .orderBy('createdAt', descending: false)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            data['id'] = doc.id;
+            return UserModel.fromMap(data);
+          }).toList();
+        });
+  }
+
+  // ============ Super Admin Operations ============
+
+  /// Check if user is super admin
+  Future<bool> isSuperAdmin(String userId) async {
+    try {
+      final doc = await _superAdminsCollection.doc(userId).get();
+      if (!doc.exists) return false;
+      final data = doc.data() as Map<String, dynamic>?;
+      return data?['isActive'] == true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error checking super admin: $e');
+      return false;
+    }
+  }
+
+  /// Get super admin by mobile number
+  Future<SuperAdminModel?> getSuperAdminByMobile(String mobileNumber) async {
+    try {
+      // Normalize phone number - try multiple formats
+      final cleanedPhone = mobileNumber.replaceAll(RegExp(r'[^\d]'), '');
+      final last10Digits = cleanedPhone.length >= 10
+          ? cleanedPhone.substring(cleanedPhone.length - 10)
+          : cleanedPhone;
+      
+      // Try with +91 prefix
+      var snapshot = await _superAdminsCollection
+          .where('mobileNumber', isEqualTo: '+91$last10Digits')
+          .where('isActive', isEqualTo: true)
+          .limit(1)
+          .get();
+      
+      if (snapshot.docs.isNotEmpty) {
+        final data = snapshot.docs.first.data() as Map<String, dynamic>;
+        data['id'] = snapshot.docs.first.id;
+        return SuperAdminModel.fromMap(data);
+      }
+      
+      // Try with just the number
+      snapshot = await _superAdminsCollection
+          .where('mobileNumber', isEqualTo: last10Digits)
+          .where('isActive', isEqualTo: true)
+          .limit(1)
+          .get();
+      
+      if (snapshot.docs.isNotEmpty) {
+        final data = snapshot.docs.first.data() as Map<String, dynamic>;
+        data['id'] = snapshot.docs.first.id;
+        return SuperAdminModel.fromMap(data);
+      }
+      
+      return null;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting super admin: $e');
+      return null;
+    }
+  }
+
+  /// Create super admin (for initial setup)
+  Future<String> createSuperAdmin({
+    required String mobileNumber,
+    required String name,
+    String? email,
+  }) async {
+    try {
+      // Normalize mobile number
+      final cleanedPhone = mobileNumber.replaceAll(RegExp(r'[^\d]'), '');
+      final last10Digits = cleanedPhone.length >= 10
+          ? cleanedPhone.substring(cleanedPhone.length - 10)
+          : cleanedPhone;
+      final normalizedPhone = '+91$last10Digits';
+      
+      // Check if super admin already exists
+      final existing = await getSuperAdminByMobile(normalizedPhone);
+      if (existing != null) {
+        throw Exception('Super Admin with this mobile number already exists');
+      }
+      
+      // Create super admin document
+      // Note: The document ID should be the Firebase Auth UID after user authenticates
+      // For now, we'll use a temporary ID that can be updated later
+      final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
+      
+      final superAdmin = SuperAdminModel(
+        id: tempId,
+        mobileNumber: normalizedPhone,
+        name: name,
+        email: email,
+        isActive: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      
+      // Note: In production, you should create this after user authenticates
+      // and use their Firebase Auth UID as the document ID
+      final docRef = await _superAdminsCollection.add(superAdmin.toMap());
+      
+      // Update the document with the actual ID
+      await docRef.update({'id': docRef.id});
+      
+      return docRef.id;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error creating super admin: $e');
+      throw Exception('Failed to create super admin: $e');
+    }
+  }
+
+  // ============ Buildings Management ============
+
+  /// Get all buildings
+  Future<List<BuildingModel>> getAllBuildings() async {
+    try {
+      final snapshot = await _buildingsCollection
+          .where('isActive', isEqualTo: true)
+          .orderBy('name')
+          .get();
+      
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return BuildingModel.fromMap(data);
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting buildings: $e');
+      return [];
+    }
+  }
+
+  /// Create building
+  Future<String> createBuilding(BuildingModel building) async {
+    try {
+      final docRef = await _buildingsCollection.add(building.toMap());
+      return docRef.id;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error creating building: $e');
+      throw Exception('Failed to create building: $e');
+    }
+  }
+
+  /// Get building by ID
+  Future<BuildingModel?> getBuildingById(String buildingId) async {
+    try {
+      final doc = await _buildingsCollection.doc(buildingId).get();
+      if (!doc.exists) return null;
+      final data = doc.data() as Map<String, dynamic>;
+      data['id'] = doc.id;
+      return BuildingModel.fromMap(data);
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting building: $e');
+      return null;
+    }
+  }
+
+  // ============ Society Feature Management ============
+
+  /// Update society enabled features
+  Future<void> updateSocietyFeatures(String societyId, Map<String, bool> enabledFeatures) async {
+    try {
+      await _societiesCollection.doc(societyId).update({
+        'enabledFeatures': enabledFeatures,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error updating society features: $e');
+      throw Exception('Failed to update society features: $e');
+    }
+  }
+
+  /// Assign committee member to society
+  Future<void> assignCommitteeMember(String societyId, String role, String userId) async {
+    try {
+      // Validate role
+      if (!['chairman', 'secretary', 'treasurer'].contains(role)) {
+        throw Exception('Invalid committee role: $role');
+      }
+
+      // Get current committee members
+      final society = await getSocietyById(societyId);
+      if (society == null) {
+        throw Exception('Society not found');
+      }
+
+      final updatedCommitteeMembers = Map<String, String?>.from(society.committeeMembers);
+      updatedCommitteeMembers[role] = userId;
+
+      // Update society
+      await _societiesCollection.doc(societyId).update({
+        'committeeMembers': updatedCommitteeMembers,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+
+      // Update user's committee role
+      await _membersCollection.doc(userId).update({
+        'committeeRole': role,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error assigning committee member: $e');
+      throw Exception('Failed to assign committee member: $e');
+    }
+  }
+
+  /// Remove committee member from society
+  Future<void> removeCommitteeMember(String societyId, String role) async {
+    try {
+      final society = await getSocietyById(societyId);
+      if (society == null) {
+        throw Exception('Society not found');
+      }
+
+      final updatedCommitteeMembers = Map<String, String?>.from(society.committeeMembers);
+      final userId = updatedCommitteeMembers[role];
+      updatedCommitteeMembers[role] = null;
+
+      // Update society
+      await _societiesCollection.doc(societyId).update({
+        'committeeMembers': updatedCommitteeMembers,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+
+      // Remove committee role from user
+      if (userId != null) {
+        await _membersCollection.doc(userId).update({
+          'committeeRole': null,
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error removing committee member: $e');
+      throw Exception('Failed to remove committee member: $e');
+    }
+  }
+
+  /// Create society (Super Admin only)
+  Future<String> createSociety(SocietyModel society) async {
+    try {
+      final docRef = await _societiesCollection.add(society.toMap());
+      return docRef.id;
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error creating society: $e');
+      throw Exception('Failed to create society: $e');
+    }
+  }
+
+  /// Get all societies for a building
+  Future<List<SocietyModel>> getSocietiesByBuilding(String buildingId) async {
+    try {
+      final snapshot = await _societiesCollection
+          .where('buildingId', isEqualTo: buildingId)
+          .where('isActive', isEqualTo: true)
+          .orderBy('name')
+          .get();
+      
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return SocietyModel.fromMap(data);
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting societies by building: $e');
+      return [];
+    }
+  }
+
+  // ============ Committee Operations (Enhanced) ============
+
+  /// Get pending approvals list (non-stream for committee dashboard)
+  Future<List<UserModel>> getPendingApprovals(String societyId) async {
+    try {
+      final snapshot = await _membersCollection
+          .where('societyId', isEqualTo: societyId)
+          .where('approvalStatus', isEqualTo: 'pending')
+          .where('isActive', isEqualTo: true)
+          .orderBy('createdAt', descending: false)
+          .get();
+      
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return UserModel.fromMap(data);
+      }).toList();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error getting pending approvals: $e');
+      return [];
+    }
+  }
+
+  /// Approve user (simplified version for committee)
+  Future<void> approveUser(String userId, String approvedByRole, String approvedBy) async {
+    await approveUserByAuthority(userId, approvedBy, approvedByRole);
+  }
+
+  /// Reject user (simplified version for committee)
+  Future<void> rejectUser(String userId, String rejectionReason) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception('User not authenticated');
+    }
+    
+    final profile = await getCurrentUserProfile();
+    if (profile == null || profile.committeeRole == null) {
+      throw Exception('Only committee members can reject users');
+    }
+    
+    await rejectUserByAuthority(
+      userId,
+      rejectionReason,
+      user.uid,
+      profile.committeeRole!,
+    );
   }
 }

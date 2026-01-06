@@ -1,9 +1,104 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import '../../constants/colors.dart';
 import '../../constants/styles.dart';
+import '../../services/firestore_service.dart';
+import '../../models/emergency_model.dart';
+import '../../services/auth_service.dart';
 
-class EmergencyScreen extends StatelessWidget {
+class EmergencyScreen extends StatefulWidget {
   const EmergencyScreen({super.key});
+
+  @override
+  State<EmergencyScreen> createState() => _EmergencyScreenState();
+}
+
+class _EmergencyScreenState extends State<EmergencyScreen> {
+  final FirestoreService _firestoreService = FirestoreService();
+  final AuthService _authService = AuthService();
+  bool _isSending = false;
+
+  Future<void> _sendEmergencyAlert(BuildContext context) async {
+    // Show confirmation dialog
+    final confirmed = await Get.dialog<bool>(
+      AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppStyles.radius16),
+        ),
+        title: const Text('Confirm Emergency Alert'),
+        content: const Text(
+          'This will send an emergency alert to all admins and emergency contacts. Are you sure?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Get.back(result: true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Send Alert'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isSending = true);
+
+    try {
+      final user = await _firestoreService.getCurrentUserProfile();
+      if (user == null) {
+        Get.snackbar('Error', 'User not found');
+        return;
+      }
+
+      final alert = EmergencyAlertModel(
+        id: '',
+        userId: _authService.currentUser?.uid ?? '',
+        userName: user.name,
+        userApartment: '${user.buildingName} - ${user.apartmentNumber}',
+        userPhone: user.mobileNumber,
+        emergencyType: 'medical',
+        severity: 'high',
+        description: 'Emergency alert sent from mobile app',
+        location: '${user.buildingName} - ${user.apartmentNumber}',
+        status: 'active',
+        alertTime: DateTime.now(),
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      await _firestoreService.createEmergencyAlert(alert);
+      
+      if (mounted) {
+        Get.snackbar(
+          'Alert Sent',
+          'Emergency alert has been sent to all contacts',
+          backgroundColor: AppColors.success,
+          colorText: Colors.white,
+          duration: const Duration(seconds: 3),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Get.snackbar(
+          'Error',
+          'Failed to send alert: ${e.toString()}',
+          backgroundColor: AppColors.error,
+          colorText: Colors.white,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,9 +192,7 @@ class EmergencyScreen extends StatelessWidget {
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: () {
-                          // TODO: Send emergency alert
-                        },
+                        onTap: _isSending ? null : () => _sendEmergencyAlert(context),
                         borderRadius: BorderRadius.circular(AppStyles.radius16),
                         child: Container(
                           width: double.infinity,
@@ -110,14 +203,24 @@ class EmergencyScreen extends StatelessWidget {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const Icon(
-                                Icons.emergency_rounded,
-                                size: 24,
-                                color: Colors.white,
-                              ),
-                              const SizedBox(width: 12),
+                              if (_isSending)
+                                const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                )
+                              else
+                                const Icon(
+                                  Icons.emergency_rounded,
+                                  size: 24,
+                                  color: Colors.white,
+                                ),
+                              if (!_isSending) const SizedBox(width: 12),
                               Text(
-                                'SEND EMERGENCY ALERT',
+                                _isSending ? 'SENDING...' : 'SEND EMERGENCY ALERT',
                                 style: AppStyles.button.copyWith(
                                   color: Colors.white,
                                   fontWeight: FontWeight.bold,
@@ -158,4 +261,3 @@ class EmergencyScreen extends StatelessWidget {
     );
   }
 }
-

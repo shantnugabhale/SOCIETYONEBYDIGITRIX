@@ -209,4 +209,48 @@ class AuthService {
   bool isSignedIn() {
     return _auth.currentUser != null;
   }
+
+  /// Sign in with email and password
+  Future<UserCredential> signInWithEmailAndPassword(String email, String password) async {
+    try {
+      final userCredential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      return userCredential;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('Error signing in with email: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Create user with email and password
+  Future<UserCredential> createUserWithEmailAndPassword(String email, String password) async {
+    try {
+      final userCredential = await _auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      return userCredential;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('Error creating user with email: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Send password reset email
+  Future<void> sendPasswordResetEmail(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('Error sending password reset email: $e');
+      }
+      rethrow;
+    }
+  }
 }

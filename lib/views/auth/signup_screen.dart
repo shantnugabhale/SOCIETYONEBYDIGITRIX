@@ -61,8 +61,8 @@ class _SignupScreenState extends State<SignupScreen> {
         _isLoading = false;
       });
 
-      // Navigate to OTP verification
-      Get.toNamed('/mobile-otp-verification');
+      // Navigate to building selection (first step in signup flow)
+      Get.toNamed('/building-selection');
     }
   }
 
@@ -79,7 +79,13 @@ class _SignupScreenState extends State<SignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-          onPressed: () => Get.back(),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              Get.offNamed('/app-entry');
+            }
+          },
         ),
       ),
       body: SafeArea(

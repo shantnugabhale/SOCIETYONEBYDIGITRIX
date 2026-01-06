@@ -159,8 +159,22 @@ class _MobileOtpVerificationScreenState extends State<MobileOtpVerificationScree
       // Fallback to argument phone number if auth phone is null
       final phoneNumber = phoneNumberFromAuth ?? _getPhoneNumber();
 
-      // Check if phone number belongs to an admin FIRST (before checking new/existing user)
+      // Check if phone number belongs to super admin FIRST
       final firestoreService = FirestoreService();
+      final superAdmin = await firestoreService.getSuperAdminByMobile(phoneNumber).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+
+      if (!mounted) return;
+
+      if (superAdmin != null) {
+        // Super Admin - navigate to super admin dashboard
+        Get.offAllNamed('/super-admin/dashboard');
+        return;
+      }
+
+      // Check if phone number belongs to regular admin
       final isAdmin = await firestoreService.isAdmin(phoneNumber).timeout(
         const Duration(seconds: 5),
         onTimeout: () => false,
@@ -179,15 +193,19 @@ class _MobileOtpVerificationScreenState extends State<MobileOtpVerificationScree
 
       if (!mounted) return;
 
-      if (isNewUser) {
-        // New user - navigate to profile setup
-        Get.offNamed(
-          '/setup-profile',
-          arguments: phoneNumber,
-        );
-      } else {
-        // Existing user - navigate to dashboard
+      // STRICT GATEKEEPER LOGIC: Check approval status BEFORE allowing access
+      final profile = await firestoreService.getCurrentUserProfile();
+      
+      if (profile == null) {
+        // No profile - new user, go to building selection
+        Get.offNamed('/building-selection');
+      } else if (profile.approvalStatus == 'approved') {
+        // APPROVED: Allow access to dashboard
         Get.offAllNamed('/dashboard');
+      } else {
+        // NOT APPROVED: Redirect to pending approval screen
+        // This includes: pending, rejected, or any other status
+        Get.offAllNamed('/pending-approval');
       }
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
@@ -402,7 +420,13 @@ class _MobileOtpVerificationScreenState extends State<MobileOtpVerificationScree
                     ),
                     child: const Icon(Icons.arrow_back_rounded, color: Colors.white),
                   ),
-                  onPressed: () => Get.back(),
+                  onPressed: () {
+                    if (Navigator.of(context).canPop()) {
+                      Navigator.of(context).pop();
+                    } else {
+                      Get.offNamed('/app-entry');
+                    }
+                  },
                 ),
               ),
               body: SafeArea(
@@ -673,7 +697,11 @@ class _MobileOtpVerificationScreenState extends State<MobileOtpVerificationScree
                                 // Change Number
                                 TextButton(
                                   onPressed: () {
-                                    Get.back();
+                                    if (Navigator.of(context).canPop()) {
+                                      Navigator.of(context).pop();
+                                    } else {
+                                      Get.offNamed('/login');
+                                    }
                                   },
                                   style: TextButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(vertical: 12),

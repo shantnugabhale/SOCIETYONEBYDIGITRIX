@@ -14,9 +14,35 @@ service cloud.firestore {
               exists(/databases/$(database)/documents/admin/$(request.auth.uid)));
     }
     
+    // Helper function to check if user is super admin
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/super_admins/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/super_admins/$(request.auth.uid)).data.isActive == true;
+    }
+    
     // Helper function to check if user is the owner of a document
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Helper function to check if user is approved
+    function isApproved() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/members/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/members/$(request.auth.uid)).data.approvalStatus == 'approved';
+    }
+    
+    // Helper function to check if user is committee member
+    function isCommitteeMember() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/members/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/members/$(request.auth.uid)).data.committeeRole in ['chairman', 'secretary', 'treasurer'];
+    }
+    
+    // Helper function to get user's societyId
+    function getUserSocietyId() {
+      return get(/databases/$(database)/documents/members/$(request.auth.uid)).data.societyId;
     }
     
     // Helper function to validate email format
@@ -31,17 +57,30 @@ service cloud.firestore {
     
     // ============ MEMBERS ============
     match /members/{userId} {
-      allow read: if isAuthenticated() && isOwner(userId);
-      allow list: if isAuthenticated();
+      // STRICT: Pending/Rejected users CANNOT read any member data
+      // Only approved users, committee members, or self can read
+      allow read: if isAuthenticated() && 
+                     (isApproved() || isCommitteeMember() || isOwner(userId));
+      
+      // Only approved users or committee can list members
+      allow list: if isAuthenticated() && (isApproved() || isCommitteeMember());
+      
+      // Create: Only during signup (self-registration with pending status)
       allow create: if isAuthenticated() && 
                        isOwner(userId) &&
                        isValidEmail(request.resource.data.email) &&
                        isValidPhone(request.resource.data.mobileNumber) &&
-                       request.resource.data.role == 'member';
-      allow update: if isAuthenticated() && 
-                       isOwner(userId) &&
-                       request.resource.data.role == resource.data.role &&
-                       request.resource.data.id == resource.data.id;
+                       request.resource.data.role == 'member' &&
+                       request.resource.data.approvalStatus == 'pending';
+      
+      // Update: Self-update (cannot change approval status) OR committee approval
+      allow update: if isAuthenticated() && (
+        (isOwner(userId) && 
+         request.resource.data.approvalStatus == resource.data.approvalStatus &&
+         request.resource.data.societyId == resource.data.societyId) ||
+        (isCommitteeMember() && 
+         request.resource.data.societyId == getUserSocietyId())
+      );
       allow delete: if isAdmin();
     }
     
@@ -59,31 +98,45 @@ service cloud.firestore {
     
     // ============ UTILITY BILLS ============
     match /utility_bills/{billId} {
-      // Allow list queries for authenticated users (for dashboard/overview)
-      allow list: if isAuthenticated();
-      // Individual document read - users can read their own bills or admins can read all
-      allow get: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
+      // STRICT: Only approved users can read, filtered by societyId
+      allow read: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId() && resource.data.userId == request.auth.uid) ||
+        (isApproved() && resource.data.societyId == getUserSocietyId() && isAdmin()) ||
+        isSuperAdmin()
       );
-      allow create: if isAdmin() &&
-                       request.resource.data.amount is number &&
-                       request.resource.data.amount > 0;
-      allow update, delete: if isAdmin();
+      allow list: if isAuthenticated() && (
+        (isApproved() && request.query.limitToFirst == null) ||
+        isSuperAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isApproved() && request.resource.data.societyId == getUserSocietyId() && isAdmin()) ||
+        isSuperAdmin()
+      ) && request.resource.data.amount is number &&
+           request.resource.data.amount > 0;
+      allow update, delete: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId() && isAdmin()) ||
+        isSuperAdmin()
+      );
     }
     
     // ============ PAYMENTS ============
     match /payments/{paymentId} {
+      // STRICT: Only approved users can read, filtered by societyId
       allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
+        (isApproved() && resource.data.societyId == getUserSocietyId() && resource.data.userId == request.auth.uid) ||
+        (isApproved() && resource.data.societyId == getUserSocietyId() && isAdmin()) ||
+        isSuperAdmin()
       );
       allow create: if isAuthenticated() &&
+                       isApproved() &&
                        request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.societyId == getUserSocietyId() &&
                        request.resource.data.amount is number &&
                        request.resource.data.amount > 0;
-      allow update: if isAdmin() &&
-                       request.resource.data.userId == resource.data.userId;
+      allow update: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId() && isAdmin() && request.resource.data.userId == resource.data.userId) ||
+        isSuperAdmin()
+      );
       allow delete: if false;
     }
     
@@ -106,8 +159,15 @@ service cloud.firestore {
     
     // ============ NOTICES ============
     match /notices/{noticeId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      // STRICT: Only approved users can read, filtered by societyId
+      allow read: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId()) ||
+        isSuperAdmin()
+      );
+      allow write: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId() && isAdmin()) ||
+        isSuperAdmin()
+      );
     }
     
     // ============ BALANCE SHEETS ============
@@ -398,16 +458,55 @@ service cloud.firestore {
     
     // ============ EXPENSES ============
     match /expenses/{expenseId} {
-      allow read: if isAuthenticated();
+      // STRICT: Only approved users can read, filtered by societyId
+      allow read: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId()) ||
+        isSuperAdmin()
+      );
       allow create: if isAuthenticated() &&
-                       request.resource.data.paidBy == request.auth.uid;
+                       isApproved() &&
+                       request.resource.data.paidBy == request.auth.uid &&
+                       request.resource.data.societyId == getUserSocietyId();
       allow update: if isAuthenticated() && (
-        isOwner(resource.data.paidBy) ||
-        isAdmin()
+        (isApproved() && resource.data.societyId == getUserSocietyId() && (isOwner(resource.data.paidBy) || isAdmin())) ||
+        isSuperAdmin()
       );
       allow delete: if isAuthenticated() && (
-        isOwner(resource.data.paidBy) ||
-        isAdmin()
+        (isApproved() && resource.data.societyId == getUserSocietyId() && (isOwner(resource.data.paidBy) || isAdmin())) ||
+        isSuperAdmin()
+      );
+    }
+    
+    // ============ SUPER ADMINS ============
+    match /super_admins/{adminId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
+    }
+    
+    // ============ BUILDINGS ============
+    match /buildings/{buildingId} {
+      allow read: if isAuthenticated() && (isApproved() || isSuperAdmin());
+      allow write: if isSuperAdmin();
+    }
+    
+    // ============ SOCIETIES ============
+    match /societies/{societyId} {
+      allow read: if isAuthenticated() && (
+        (isApproved() && resource.data.id == getUserSocietyId()) ||
+        isSuperAdmin()
+      );
+      allow write: if isSuperAdmin();
+    }
+    
+    // ============ UNITS ============
+    match /units/{unitId} {
+      allow read: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId()) ||
+        isSuperAdmin()
+      );
+      allow write: if isAuthenticated() && (
+        (isApproved() && resource.data.societyId == getUserSocietyId() && isAdmin()) ||
+        isSuperAdmin()
       );
     }
     

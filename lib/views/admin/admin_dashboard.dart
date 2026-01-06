@@ -730,6 +730,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                     Get.toNamed('/balance-sheet');
                   },
                 ),
+                _buildQuickActionCard(
+                  context: context,
+                  icon: Icons.verified_user_rounded,
+                  title: 'Authority Approval',
+                  subtitle: 'Approve pending users',
+                  color: AppColors.warning,
+                  onTap: () {
+                    Get.toNamed('/authority-approval');
+                  },
+                ),
               ],
             ),
             

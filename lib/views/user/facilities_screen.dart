@@ -6,6 +6,8 @@ import '../../widgets/modern_empty_state.dart';
 import '../../widgets/card_widget.dart';
 import '../../services/firestore_service.dart';
 import '../../models/facility_model.dart';
+import '../../models/user_model.dart';
+import '../../services/auth_service.dart';
 import '../../utils/format_utils.dart';
 
 class FacilitiesScreen extends StatefulWidget {
@@ -17,10 +19,24 @@ class FacilitiesScreen extends StatefulWidget {
 
 class _FacilitiesScreenState extends State<FacilitiesScreen> {
   final FirestoreService _firestoreService = FirestoreService();
+  final AuthService _authService = AuthService();
+  UserModel? _currentUser;
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    try {
+      final user = await _firestoreService.getCurrentUserProfile();
+      setState(() {
+        _currentUser = user;
+      });
+    } catch (e) {
+      // Handle error
+    }
   }
 
   @override
@@ -78,9 +94,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Get.snackbar('Info', 'Facility booking feature coming soon!');
-        },
+        onPressed: () => _showBookingDialog(context),
         backgroundColor: AppColors.accent,
         icon: const Icon(Icons.add_rounded, color: AppColors.textOnPrimary),
         label: const Text(
@@ -288,10 +302,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () {
-                      Get.back();
-                      Get.snackbar('Info', 'Booking feature coming soon!');
-                    },
+                    onPressed: () => _bookFacility(facility),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.accent,
                       foregroundColor: AppColors.textOnPrimary,
@@ -329,5 +340,54 @@ class _FacilitiesScreenState extends State<FacilitiesScreen> {
         ],
       ),
     );
+  }
+
+  void _showBookingDialog(BuildContext context) {
+    Get.snackbar('Info', 'Select a facility to book');
+  }
+
+  Future<void> _bookFacility(FacilityModel facility) async {
+    if (_currentUser == null) {
+      Get.snackbar('Error', 'Please wait while we load your profile');
+      return;
+    }
+
+    final startDate = DateTime.now();
+    final endDate = startDate.add(const Duration(hours: 1));
+
+    final booking = FacilityBookingModel(
+      id: '',
+      facilityId: facility.id,
+      facilityName: facility.name,
+      userId: _authService.currentUser?.uid ?? '',
+      userName: _currentUser!.name,
+      userApartment: '${_currentUser!.buildingName} - ${_currentUser!.apartmentNumber}',
+      startTime: startDate,
+      endTime: endDate,
+      numberOfGuests: 1,
+      status: facility.requiresApproval ? 'pending' : 'approved',
+      totalAmount: facility.hourlyRate,
+      paymentStatus: facility.hourlyRate > 0 ? 'pending' : 'paid',
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    try {
+      await _firestoreService.createFacilityBooking(booking);
+      Get.back(); // Close facility details dialog
+      Get.snackbar(
+        'Success',
+        'Facility booking ${facility.requiresApproval ? "requested" : "confirmed"}!',
+        backgroundColor: AppColors.success,
+        colorText: Colors.white,
+      );
+    } catch (e) {
+      Get.snackbar(
+        'Error',
+        'Failed to book facility: ${e.toString()}',
+        backgroundColor: AppColors.error,
+        colorText: Colors.white,
+      );
+    }
   }
 }

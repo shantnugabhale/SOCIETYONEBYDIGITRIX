@@ -230,6 +230,29 @@ class StorageService {
     }
   }
 
+  /// Upload address proof document
+  Future<String> uploadAddressProof(File file, String userId) async {
+    try {
+      final fileName = 'address_proof_${userId}_${DateTime.now().millisecondsSinceEpoch}${path.extension(file.path)}';
+      final Reference ref = _storage.ref().child('address_proofs/$fileName');
+      
+      final UploadTask uploadTask = ref.putFile(file);
+      final TaskSnapshot snapshot = await uploadTask;
+      final String downloadUrl = await snapshot.ref.getDownloadURL();
+      
+      if (kDebugMode) {
+        debugPrint('Address proof uploaded: $downloadUrl');
+      }
+      
+      return downloadUrl;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('Error uploading address proof: $e');
+      }
+      throw Exception('Failed to upload address proof: $e');
+    }
+  }
+
   /// Delete a file from Firebase Storage using its URL
   Future<void> deleteFile(String fileUrl) async {
     try {

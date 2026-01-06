@@ -8,6 +8,7 @@ import '../../widgets/input_field.dart';
 import '../../utils/validators.dart';
 import '../../services/firestore_service.dart';
 import '../../services/auth_service.dart';
+import '../../models/society_model.dart';
 
 class SetupProfileScreen extends StatefulWidget {
   final String phoneNumber;
@@ -82,7 +83,19 @@ class _SetupProfileScreenState extends State<SetupProfileScreen> with SingleTick
           throw Exception('User not authenticated. Please login again.');
         }
 
-        // Save profile to Firestore
+        // Get onboarding data (society/unit/role) from arguments
+        final onboardingData = Get.arguments;
+        SocietyModel? society;
+        String? userType;
+        String? phoneNumber = widget.phoneNumber;
+        
+        if (onboardingData is Map<String, dynamic>) {
+          society = onboardingData['society'] as SocietyModel?;
+          userType = onboardingData['userType'] as String?;
+          phoneNumber = onboardingData['phoneNumber'] as String? ?? phoneNumber;
+        }
+
+        // Save profile to Firestore with society/unit/role data
         final firestoreService = FirestoreService();
         await firestoreService.saveMemberProfile(
           firstName: _firstNameController.text.trim(),
@@ -91,9 +104,12 @@ class _SetupProfileScreenState extends State<SetupProfileScreen> with SingleTick
               : _middleNameController.text.trim(),
           surname: _surnameController.text.trim(),
           email: _emailController.text.trim(),
-          phoneNumber: widget.phoneNumber,
+          phoneNumber: phoneNumber ?? '+91',
           flatNumber: _flatNumberController.text.trim(),
           building: _buildingController.text.trim(),
+          societyId: society?.id,
+          societyName: society?.name,
+          userType: userType,
         );
 
         setState(() {
@@ -109,8 +125,9 @@ class _SetupProfileScreenState extends State<SetupProfileScreen> with SingleTick
           duration: const Duration(seconds: 2),
         );
 
-        // Navigate to dashboard
-        Get.offAllNamed('/dashboard');
+        // STRICT ONBOARDING: Navigate to address proof upload (mandatory)
+        // After upload, user will be forcefully logged out
+        Get.offAllNamed('/address-proof-upload');
       } on FirebaseAuthException catch (e) {
         setState(() {
           _isLoading = false;

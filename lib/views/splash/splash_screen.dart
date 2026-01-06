@@ -63,35 +63,49 @@ class _SplashScreenState extends State<SplashScreen>
       final currentUser = authService.currentUser;
       
       if (currentUser != null) {
-        // User is logged in - check if admin first
+        // User is logged in - check if super admin first
         final phoneNumber = currentUser.phoneNumber ?? '+91';
         final firestoreService = FirestoreService();
-        final isAdmin = await firestoreService.isAdmin(phoneNumber);
+        final superAdmin = await firestoreService.getSuperAdminByMobile(phoneNumber);
         
         if (mounted) {
+          if (superAdmin != null) {
+            // Super Admin - go to super admin dashboard
+            Get.offAllNamed('/super-admin/dashboard');
+            return;
+          }
+          
+          // Check if regular admin
+          final isAdmin = await firestoreService.isAdmin(phoneNumber);
           if (isAdmin) {
             // Admin user - go to admin dashboard
             Get.offAllNamed('/admin-dashboard');
             return;
           }
           
-          // Not admin - check if profile exists
+          // Not admin - check if profile exists and is approved
           final profile = await firestoreService.getCurrentUserProfile();
           
           if (mounted) {
             if (profile != null) {
-              // User has profile - go to dashboard
-              Get.offAllNamed('/dashboard');
+              // STRICT GATEKEEPER: Check approval status
+              if (profile.approvalStatus == 'approved') {
+                // Approved - allow access
+                Get.offAllNamed('/dashboard');
+              } else {
+                // Pending or rejected - show pending approval screen
+                Get.offAllNamed('/pending-approval');
+              }
             } else {
-              // User authenticated but no profile - go to profile setup
-              Get.offAllNamed('/setup-profile', arguments: phoneNumber);
+              // User authenticated but no profile - go to building selection
+              Get.offAllNamed('/building-selection');
             }
           }
         }
       } else {
-        // User not authenticated - go to login
+        // User not authenticated - go to app entry screen
         if (mounted) {
-          Get.offNamed('/login');
+          Get.offNamed('/app-entry');
         }
       }
     } catch (e) {

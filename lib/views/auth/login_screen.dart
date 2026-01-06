@@ -55,12 +55,20 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       final currentUser = authService.currentUser;
       
       if (currentUser != null) {
-        // User is already logged in - check if admin first
+        // User is already logged in - check if super admin first
         final phoneNumber = currentUser.phoneNumber ?? '+91';
         final firestoreService = FirestoreService();
-        final isAdmin = await firestoreService.isAdmin(phoneNumber);
+        final superAdmin = await firestoreService.getSuperAdminByMobile(phoneNumber);
         
         if (mounted) {
+          if (superAdmin != null) {
+            // Super Admin - redirect to super admin dashboard
+            Get.offAllNamed('/super-admin/dashboard');
+            return;
+          }
+          
+          // Check if regular admin
+          final isAdmin = await firestoreService.isAdmin(phoneNumber);
           if (isAdmin) {
             // Admin user - redirect to admin dashboard
             Get.offAllNamed('/admin-dashboard');
@@ -72,7 +80,13 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
           
           if (mounted) {
             if (profile != null) {
-              Get.offAllNamed('/dashboard');
+              // STRICT GATEKEEPER: Check approval status
+              if (profile.approvalStatus == 'approved') {
+                Get.offAllNamed('/dashboard');
+              } else {
+                // Pending or rejected - show pending screen
+                Get.offAllNamed('/pending-approval');
+              }
             } else {
               // User authenticated but no profile
               Get.offAllNamed('/setup-profile', arguments: phoneNumber);
@@ -238,6 +252,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                           Center(
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
                                 Container(
                                   width: 120,
@@ -259,22 +274,22 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                     color: AppColors.primary,
                                   ),
                                 ),
-                                const SizedBox(height: AppStyles.spacing24),
+                                const SizedBox(height: AppStyles.spacing16),
                                 Text(
                                   'Welcome Back!',
                                   style: AppStyles.heading1.copyWith(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 32,
+                                    fontSize: 28,
                                   ),
                                   textAlign: TextAlign.center,
                                 ),
-                                const SizedBox(height: AppStyles.spacing8),
+                                const SizedBox(height: AppStyles.spacing4),
                                 Text(
                                   'Your community, connected',
                                   style: AppStyles.bodyLarge.copyWith(
                                     color: Colors.white.withValues(alpha: 0.9),
-                                    fontSize: 16,
+                                    fontSize: 14,
                                   ),
                                   textAlign: TextAlign.center,
                                 ),

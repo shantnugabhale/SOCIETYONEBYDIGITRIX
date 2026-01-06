@@ -44,6 +44,22 @@ import '../views/user/committee_dashboard_screen.dart';
 import '../views/user/security_dashboard_screen.dart';
 import '../views/user/activity_screen.dart';
 import '../views/user/community_screen.dart';
+import '../views/auth/building_selection_screen.dart';
+import '../views/auth/society_selection_screen.dart';
+import '../views/auth/unit_selection_screen.dart';
+import '../views/auth/role_selection_screen.dart';
+import '../views/auth/pending_approval_screen.dart';
+import '../views/auth/blocked_access_screen.dart';
+import '../views/auth/address_proof_upload_screen.dart';
+import '../views/admin/authority_approval_dashboard.dart';
+import '../views/auth/app_entry_screen.dart';
+import '../views/auth/email_login_screen.dart';
+import '../views/super_admin/super_admin_dashboard.dart';
+import '../views/super_admin/buildings_management_screen.dart';
+import '../views/super_admin/societies_management_screen.dart';
+import '../views/super_admin/committee_assignment_screen.dart';
+import '../views/super_admin/feature_management_screen.dart';
+import '../middleware/route_guard_middleware.dart';
 
 class AppRoutes {
   static final routes = [
@@ -53,10 +69,20 @@ class AppRoutes {
       page: () => const SplashScreen(),
     ),
     
+    // App Entry (3 options screen)
+    GetPage(
+      name: '/app-entry',
+      page: () => const AppEntryScreen(),
+    ),
+    
     // Authentication
     GetPage(
       name: '/login',
       page: () => const LoginScreen(),
+    ),
+    GetPage(
+      name: '/email-login',
+      page: () => const EmailLoginScreen(),
     ),
     GetPage(
       name: '/signup',
@@ -74,6 +100,34 @@ class AppRoutes {
       },
     ),
     GetPage(
+      name: '/building-selection',
+      page: () => const BuildingSelectionScreen(),
+    ),
+    GetPage(
+      name: '/society-selection',
+      page: () => const SocietySelectionScreen(),
+    ),
+    GetPage(
+      name: '/unit-selection',
+      page: () => const UnitSelectionScreen(),
+    ),
+    GetPage(
+      name: '/role-selection',
+      page: () => const RoleSelectionScreen(),
+    ),
+    GetPage(
+      name: '/pending-approval',
+      page: () => const PendingApprovalScreen(),
+    ),
+    GetPage(
+      name: '/blocked-access',
+      page: () => const BlockedAccessScreen(),
+    ),
+    GetPage(
+      name: '/address-proof-upload',
+      page: () => const AddressProofUploadScreen(),
+    ),
+    GetPage(
       name: '/forgot-password',
       page: () => const LoginScreen(),
     ),
@@ -82,6 +136,7 @@ class AppRoutes {
     GetPage(
       name: '/dashboard',
       page: () => const MainNavigationScreen(),
+      middlewares: [RouteGuardMiddleware()],
     ),
     GetPage(
       name: '/resident-dashboard',
@@ -203,9 +258,36 @@ class AppRoutes {
     ),
     
     // Admin Routes
+    // Super Admin Routes
+    GetPage(
+      name: '/super-admin/dashboard',
+      page: () => const SuperAdminDashboard(),
+    ),
+    GetPage(
+      name: '/super-admin/buildings',
+      page: () => const BuildingsManagementScreen(),
+    ),
+    GetPage(
+      name: '/super-admin/societies',
+      page: () => const SocietiesManagementScreen(),
+    ),
+    GetPage(
+      name: '/super-admin/committee',
+      page: () => const CommitteeAssignmentScreen(),
+    ),
+    GetPage(
+      name: '/super-admin/features',
+      page: () => const FeatureManagementScreen(),
+    ),
+    
+    // Admin Routes
     GetPage(
       name: '/admin-dashboard',
       page: () => const AdminDashboardScreen(),
+    ),
+    GetPage(
+      name: '/committee-verification',
+      page: () => const AuthorityApprovalDashboard(),
     ),
     GetPage(
       name: '/member-management',

@@ -294,7 +294,10 @@ class _ResidentDashboardScreenState extends State<ResidentDashboardScreen> {
                   const SizedBox(height: 12),
                   _buildUpcomingEvents(),
                   
-                  const SizedBox(height: 80), // Space for FAB
+                  // Add padding for FAB and bottom navigation
+                  SizedBox(
+                    height: 100 + MediaQuery.of(context).padding.bottom,
+                  ),
                 ]),
               ),
             ),
